@@ -74,4 +74,4 @@ README.md
 
 ## Author
 
-Ashutosh Singh Yadav — I3C Summer School 2026, IIT Jammu
+Ashutosh Singh Yadav 
