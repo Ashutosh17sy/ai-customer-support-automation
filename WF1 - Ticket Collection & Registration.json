@@ -1,0 +1,358 @@
+{
+  "name": "WF1 - Ticket Collection & Registration",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ticket-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4b0796ca-3cd9-4309-8b03-6d953822cf11",
+      "name": "Webhook - Web Form / Chatbot",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1440,
+        80
+      ],
+      "webhookId": "ticket-intake"
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "id": "59908389-78ea-425d-9898-a60cdd1574d2",
+      "name": "Gmail Trigger - Support Inbox",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1440,
+        352
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "LNLYuDRzk9O9ZEk4",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize webhook (website form / chatbot) payload into common ticket schema\nconst body = $input.item.json.body || $input.item.json;\n\nreturn {\n  json: {\n    channel: body.channel === 'chatbot' ? 'chatbot' : 'webform',\n    customer_name: body.name || 'Unknown',\n    customer_email: body.email,\n    subject: body.subject || '(no subject)',\n    description: body.message || body.description || ''\n  }\n};"
+      },
+      "id": "02007759-500d-4912-8c8f-93f75af7dc41",
+      "name": "Normalize Webhook Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize Gmail trigger payload into common ticket schema\nconst msg = $input.item.json;\n\nconst fromHeader = msg.from || (msg.headers && msg.headers.from) || '';\nconst emailMatch = fromHeader.match(/<(.+)>/);\nconst customerEmail = emailMatch ? emailMatch[1] : fromHeader;\nconst nameMatch = fromHeader.split('<')[0].trim();\n\nreturn {\n  json: {\n    channel: 'email',\n    customer_name: nameMatch || 'Unknown',\n    customer_email: customerEmail,\n    subject: msg.subject || '(no subject)',\n    description: msg.text || msg.snippet || ''\n  }\n};"
+      },
+      "id": "c1bf6d78-9e62-4b82-9a59-5ff77adaa107",
+      "name": "Normalize Email Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate a human-readable ticket reference\nconst ts = Date.now().toString().slice(-8);\nconst rand = Math.floor(Math.random() * 90 + 10);\nconst ticket_ref = `TCK-${ts}${rand}`;\n\nreturn {\n  json: {\n    ...$input.item.json,\n    ticket_ref\n  }\n};"
+      },
+      "id": "154df71e-1ee1-4ca7-a4a2-a95270d7ec76",
+      "name": "Generate Ticket Reference",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO customers (name, email)\nVALUES ('{{ $json.customer_name.replace(/'/g, \"''\") }}', '{{ $json.customer_email }}')\nON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name\nRETURNING customer_id;",
+        "options": {}
+      },
+      "id": "169f3878-bd7d-44d3-b5d3-b6d604317076",
+      "name": "Upsert Customer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -720,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tickets (ticket_ref, customer_id, channel, subject, description, status)\nVALUES (\n  '{{ $('Generate Ticket Reference').item.json.ticket_ref }}',\n  {{ $json.customer_id }},\n  '{{ $('Generate Ticket Reference').item.json.channel }}',\n  '{{ $('Generate Ticket Reference').item.json.subject.replace(/'/g, \"''\") }}',\n  '{{ $('Generate Ticket Reference').item.json.description.replace(/'/g, \"''\") }}',\n  'NEW'\n)\nRETURNING ticket_id, ticket_ref;",
+        "options": {}
+      },
+      "id": "7d8445e8-9e45-4b2f-8772-8a6d9e5aeb0b",
+      "name": "Insert Ticket",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -480,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $json.ticket_id }},\n  'CREATED',\n  'WF1_Ticket_Collection',\n  '{{ JSON.stringify({ ticket_ref: $json.ticket_ref, channel: $('Generate Ticket Reference').item.json.channel }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "4566299f-e1f1-4186-9729-c6f2f1df3eb6",
+      "name": "Log Event - Created",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -240,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wF0x6qMdXgEZWH4O",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/wF0x6qMdXgEZWH4O",
+          "cachedResultName": "WF2 - AI Classification & Prioritization"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ticket_id": "={{ $('Insert Ticket').item.json.ticket_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ticket_id",
+              "displayName": "ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": true,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "b04ef367-75ff-4614-87ac-4726cceec0de",
+      "name": "Trigger WF2 - AI Classification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"received\", \"message\": \"Ticket submitted successfully\" } }}",
+        "options": {}
+      },
+      "id": "6db74def-0786-4ddb-859d-5c2df8d42165",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  NULL,\n  'ERROR',\n  'WF1_Ticket_Collection',\n  '{{ JSON.stringify({ error: $json.error?.message || \"Unknown error\", node: $json.error?.node?.name || \"unknown\" }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "4d850d76-b860-403a-8ed4-1bf768001a5b",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -240,
+        432
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Web Form / Chatbot": {
+      "main": [
+        [
+          {
+            "node": "Normalize Webhook Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Trigger - Support Inbox": {
+      "main": [
+        [
+          {
+            "node": "Normalize Email Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Webhook Data": {
+      "main": [
+        [
+          {
+            "node": "Generate Ticket Reference",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Email Data": {
+      "main": [
+        [
+          {
+            "node": "Generate Ticket Reference",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Ticket Reference": {
+      "main": [
+        [
+          {
+            "node": "Upsert Customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Customer": {
+      "main": [
+        [
+          {
+            "node": "Insert Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Ticket": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Created",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event - Created": {
+      "main": [
+        [
+          {
+            "node": "Trigger WF2 - AI Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "ec286f82-b2f2-4a20-9530-0975efc03f74",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "df77906c375c302bb650e5e958dcfa6af8fe6f2a90d08461b68f895f570674ea"
+  },
+  "nodeGroups": [],
+  "id": "mWbWbV31At669i3m",
+  "tags": []
+}

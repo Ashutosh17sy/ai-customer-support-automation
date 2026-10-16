@@ -1,0 +1,289 @@
+{
+  "name": "WF2 - AI Classification & Prioritization",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "ticket_id"
+            }
+          ]
+        }
+      },
+      "id": "a3fb1707-43b1-4562-b2f8-a48e73bbf0a4",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ticket_id, ticket_ref, subject, description, channel\nFROM tickets\nWHERE ticket_id = {{ $json.ticket_id }};",
+        "options": {}
+      },
+      "id": "fea11c54-6311-49f8-ba66-b41bea141892",
+      "name": "Fetch Ticket Details",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.6-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.6-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are a support ticket triage assistant. Analyze the ticket below and respond with ONLY a valid JSON object (no markdown, no code fences, no extra text) with exactly these keys:\n{\n  \"category\": one of [\"billing\", \"technical\", \"account\", \"general\"],\n  \"priority\": one of [\"urgent\", \"high\", \"medium\", \"low\"],\n  \"sentiment\": one of [\"positive\", \"neutral\", \"negative\", \"frustrated\"],\n  \"summary\": a one-sentence summary of the issue,\n  \"draft_reply\": a short, empathetic 2-3 sentence draft reply an agent could send to the customer\n}\n\nTicket Subject: {{ $json.subject }}\nTicket Description: {{ $json.description }}\nChannel: {{ $json.channel }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "e94b47ef-ca50-4510-a515-a8c4d72f90c6",
+      "name": "Gemini - Classify Ticket",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        512,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "BcBDwY5JrpwL0q5l",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Gemini's JSON response safely, stripping any accidental markdown fences\nconst raw = $input.item.json.content?.parts?.[0]?.text || '';\nlet cleaned = raw.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  parsed = {\n    category: 'general',\n    priority: 'medium',\n    sentiment: 'neutral',\n    summary: 'Could not auto-classify — needs manual review',\n    draft_reply: 'Thank you for reaching out. Our team is reviewing your request and will follow up shortly.'\n  };\n}\n\nconst ticket = $('Fetch Ticket Details').item.json;\n\nconst slaHours = { urgent: 2, high: 8, medium: 24, low: 72 };\nconst hours = slaHours[parsed.priority] || 24;\n\nreturn {\n  json: {\n    ticket_id: ticket.ticket_id,\n    ticket_ref: ticket.ticket_ref,\n    category: parsed.category,\n    priority: parsed.priority,\n    sentiment: parsed.sentiment,\n    ai_summary: parsed.summary,\n    ai_draft_reply: parsed.draft_reply,\n    sla_hours: hours\n  }\n};"
+      },
+      "id": "aada5e74-7089-47d7-ad5b-fb209b37bf05",
+      "name": "Parse Gemini Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tickets\nSET category = '{{ $json.category }}',\n    priority = '{{ $json.priority }}',\n    sentiment = '{{ $json.sentiment }}',\n    ai_summary = '{{ $json.ai_summary.replace(/'/g, \"''\") }}',\n    ai_draft_reply = '{{ $json.ai_draft_reply.replace(/'/g, \"''\") }}',\n    status = 'CLASSIFIED',\n    sla_due_at = NOW() + ({{ $json.sla_hours }} || ' hours')::interval,\n    updated_at = NOW()\nWHERE ticket_id = {{ $json.ticket_id }}\nRETURNING ticket_id, ticket_ref, category, priority;",
+        "options": {}
+      },
+      "id": "5fb441b2-baa4-420e-ba9a-adcdc54ac34f",
+      "name": "Update Ticket with Classification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1024,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $json.ticket_id }},\n  'CLASSIFIED',\n  'WF2_AI_Classification',\n  '{{ JSON.stringify({ category: $json.category, priority: $json.priority }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "d73741a2-c5ee-48cf-89dd-0cb44fadb2d1",
+      "name": "Log Event - Classified",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1264,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "k8CPXdsuQiMiFLej",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/k8CPXdsuQiMiFLej",
+          "cachedResultName": "WF3 - Agent Assignment & Escalation"
+        },
+        "workflowInputs": {
+          "value": {
+            "ticket_id": "={{ $('Update Ticket with Classification').item.json.ticket_id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "85d1f478-073d-40b5-bdce-4d6529df3635",
+      "name": "Trigger WF3 - Agent Assignment",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1504,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $json.ticket_id }},\n  'ERROR',\n  'WF2_AI_Classification',\n  '{{ JSON.stringify({ error: \"classification update failed\" }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "c723939a-c3b9-46a4-b241-1ff97e8c0dfe",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1024,
+        224
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "ticket_id": 1
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ticket Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ticket Details": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Classify Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Classify Ticket": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Response": {
+      "main": [
+        [
+          {
+            "node": "Update Ticket with Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Ticket with Classification": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Classified",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event - Classified": {
+      "main": [
+        [
+          {
+            "node": "Trigger WF3 - Agent Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "fc316808-4445-499f-b17d-2a84f11fd5a1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "df77906c375c302bb650e5e958dcfa6af8fe6f2a90d08461b68f895f570674ea"
+  },
+  "nodeGroups": [],
+  "id": "wF0x6qMdXgEZWH4O",
+  "tags": []
+}

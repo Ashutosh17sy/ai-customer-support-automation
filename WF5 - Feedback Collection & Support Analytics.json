@@ -1,0 +1,427 @@
+{
+  "name": "WF5 - Feedback Collection & Support Analytics",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "ticket_id"
+            }
+          ]
+        }
+      },
+      "id": "97b93657-27ba-445f-a042-6e961d1750a9",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.ticket_id, t.ticket_ref, c.name AS customer_name, c.email AS customer_email\nFROM tickets t\nJOIN customers c ON c.customer_id = t.customer_id\nWHERE t.ticket_id = {{ $json.ticket_id }};",
+        "options": {}
+      },
+      "id": "56e20693-914a-4b9b-9322-a954f5602e7e",
+      "name": "Fetch Resolved Ticket",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        464,
+        -96
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.customer_email }}",
+        "subject": "=How did we do? Ticket {{ $json.ticket_ref }}",
+        "message": "=Hi {{ $json.customer_name }},<br><br>Your ticket <b>{{ $json.ticket_ref }}</b> was recently resolved. We'd love to know how we did.<br><br>Please reply to this email with a rating from 1 (poor) to 5 (excellent), and any comments you'd like to share.<br><br>Thank you for helping us improve!<br><br>— Support Team",
+        "options": {}
+      },
+      "id": "524ff758-1805-4979-9d41-1ef9cb7f0848",
+      "name": "Email - Feedback Request",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        704,
+        -96
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "webhookId": "18dc0f91-3c37-425e-98a2-33016400dd2c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "LNLYuDRzk9O9ZEk4",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "feedback-submit",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d99bfcf0-bd6c-4508-b6ce-694154c2f65f",
+      "name": "Webhook - Feedback Submitted",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        224,
+        208
+      ],
+      "webhookId": "feedback-submit"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Basic keyword-based theming (lightweight, no extra AI call needed)\nconst body = $input.item.json.body;\nconst comment = (body.comment || '').toLowerCase();\n\nconst themeMap = {\n  slow_response: ['slow', 'delay', 'wait', 'long time'],\n  helpful_agent: ['helpful', 'great', 'friendly', 'kind', 'thank'],\n  unresolved: ['not resolved', 'still broken', 'didn\\'t work', \"didn't fix\"],\n  billing_issue: ['charge', 'billing', 'refund', 'payment']\n};\n\nconst tags = [];\nfor (const [tag, keywords] of Object.entries(themeMap)) {\n  if (keywords.some(k => comment.includes(k))) tags.push(tag);\n}\n\nreturn {\n  json: {\n    ticket_id: body.ticket_id,\n    rating: body.rating,\n    comment: body.comment || '',\n    theme_tags: tags\n  }\n};"
+      },
+      "id": "b2f014c9-a0df-4b8f-b676-486fa97e3d61",
+      "name": "Tag Feedback Themes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO feedback (ticket_id, rating, comment, ai_theme_tags)\nVALUES (\n  {{ $json.ticket_id }},\n  {{ $json.rating }},\n  '{{ $json.comment.replace(/'/g, \"''\") }}',\n  ARRAY[{{ $json.theme_tags.map(t => \"'\" + t + \"'\").join(',') }}]::text[]\n);",
+        "options": {}
+      },
+      "id": "00aec62d-caa5-4e2b-8981-58215e64b5d9",
+      "name": "Insert Feedback",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        704,
+        208
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tickets SET status = 'CLOSED', updated_at = NOW()\nWHERE ticket_id = {{ $json.ticket_id }};",
+        "options": {}
+      },
+      "id": "fdb7092e-1bb1-4c6f-bdc4-c16fe2afd6f5",
+      "name": "Close Ticket",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        944,
+        208
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $json.ticket_id }},\n  'FEEDBACK_RECEIVED',\n  'WF5_Feedback_Analytics',\n  '{{ JSON.stringify({ closed: true }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "0d7ca3eb-c62e-44ec-8b91-a3c9a0165ce2",
+      "name": "Log Event - Closed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1184,
+        208
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"thank you\" } }}",
+        "options": {}
+      },
+      "id": "4578700f-ed27-4ec7-849f-8bafb5f6f3ec",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1424,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks"
+            }
+          ]
+        }
+      },
+      "id": "e4cc4140-a16e-4d93-bedc-7dc0e3213d5b",
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT week, category, priority, ticket_count, avg_resolution_hours\nFROM v_weekly_summary\nORDER BY week DESC, ticket_count DESC;",
+        "options": {}
+      },
+      "id": "a5e1a6d5-9dbd-4b0e-a7ef-098162c5316d",
+      "name": "Fetch Weekly Summary",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        464,
+        512
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) FILTER (WHERE rating <= 2) AS low_ratings,\n       COUNT(*) AS total_ratings,\n       ROUND(AVG(rating)::numeric, 2) AS avg_rating,\n       unnest(ai_theme_tags) AS theme\nFROM feedback\nWHERE submitted_at > NOW() - INTERVAL '7 days'\nGROUP BY unnest(ai_theme_tags)\nORDER BY COUNT(*) DESC;",
+        "options": {}
+      },
+      "id": "080b35c4-f1ca-492b-96c9-384cdb3110cd",
+      "name": "Fetch Feedback Themes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        464,
+        672
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine weekly ticket summary + feedback themes into one readable report\nconst summaryRows = $('Fetch Weekly Summary').all().map(i => i.json);\nconst themeRows = $input.all().map(i => i.json);\n\nlet report = '<h2>Weekly Support Analytics</h2>';\nreport += '<h3>Ticket Volume by Category & Priority</h3><table border=\"1\" cellpadding=\"6\"><tr><th>Week</th><th>Category</th><th>Priority</th><th>Tickets</th><th>Avg Resolution (hrs)</th></tr>';\nfor (const r of summaryRows) {\n  report += `<tr><td>${r.week}</td><td>${r.category}</td><td>${r.priority}</td><td>${r.ticket_count}</td><td>${r.avg_resolution_hours ?? '-'}</td></tr>`;\n}\nreport += '</table>';\n\nreport += '<h3>Feedback Themes (last 7 days)</h3><table border=\"1\" cellpadding=\"6\"><tr><th>Theme</th></tr>';\nfor (const r of themeRows) {\n  report += `<tr><td>${r.theme}</td></tr>`;\n}\nreport += '</table>';\n\nreturn { json: { report_html: report } };"
+      },
+      "id": "7edffd29-56f9-4bdb-9912-9fb792b176c3",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "ashus17777@gamil.com",
+        "subject": "=Weekly Support Analytics Report",
+        "message": "={{ $json.report_html }}",
+        "options": {}
+      },
+      "id": "f3247969-0a41-4b04-a971-eeacb80c56b1",
+      "name": "Email - Weekly Report to Manager",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        944,
+        592
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "webhookId": "44bd100d-b7ac-4f2e-9d15-24336518ec01",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "LNLYuDRzk9O9ZEk4",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Fetch Resolved Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Resolved Ticket": {
+      "main": [
+        [
+          {
+            "node": "Email - Feedback Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Feedback Submitted": {
+      "main": [
+        [
+          {
+            "node": "Tag Feedback Themes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag Feedback Themes": {
+      "main": [
+        [
+          {
+            "node": "Insert Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Feedback": {
+      "main": [
+        [
+          {
+            "node": "Close Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Close Ticket": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Closed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event - Closed": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Weekly Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Weekly Summary": {
+      "main": [
+        [
+          {
+            "node": "Fetch Feedback Themes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Feedback Themes": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Email - Weekly Report to Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "c38581bc-395b-455b-bea0-7302610f9199",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "df77906c375c302bb650e5e958dcfa6af8fe6f2a90d08461b68f895f570674ea"
+  },
+  "nodeGroups": [],
+  "id": "mEJ4EKpZTZQGBHay",
+  "tags": []
+}

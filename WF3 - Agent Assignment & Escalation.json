@@ -1,0 +1,646 @@
+{
+  "name": "WF3 - Agent Assignment & Escalation",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "ticket_id"
+            }
+          ]
+        }
+      },
+      "id": "3ad86b96-bba6-4740-9736-dfdb8970ca65",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -1472,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ticket_id, ticket_ref, category, priority\nFROM tickets\nWHERE ticket_id = {{ $json.ticket_id }};",
+        "options": {}
+      },
+      "id": "3fb9c5a0-1a7e-460b-adba-d2f0f92eb4ee",
+      "name": "Fetch Ticket for Assignment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1216,
+        48
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT agent_id, name, email, role\nFROM agents\nWHERE category_skill = '{{ $json.category }}' AND is_available = true\nORDER BY active_ticket_count ASC\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "6245824f-5dff-4c81-b043-44297c95dabd",
+      "name": "Find Matching Agent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -976,
+        48
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.agent_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              },
+              "id": "964f95f5-3d2d-483d-9b8f-4f11fda18ae8"
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "d2037b9f-251c-4034-b5e4-e87f016f8777",
+      "name": "Agent Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -736,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT agent_id, name, email, role\nFROM agents\nWHERE category_skill = 'general' AND is_available = true\nORDER BY active_ticket_count ASC\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "fe2a7bde-a3bb-4aec-87ad-08b6eef0dbcf",
+      "name": "Find Fallback Agent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -736,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine ticket + agent info for the next steps\nconst ticket = $('Fetch Ticket for Assignment').item.json;\nconst agent = $input.item.json;\n\nreturn {\n  json: {\n    ticket_id: ticket.ticket_id,\n    ticket_ref: ticket.ticket_ref,\n    priority: ticket.priority,\n    category: ticket.category,\n    agent_id: agent.agent_id,\n    agent_name: agent.name,\n    agent_email: agent.email,\n    is_urgent: ticket.priority === 'urgent'\n  }\n};"
+      },
+      "id": "fd5dd4d5-2bc0-4c22-8237-67fca6a429ea",
+      "name": "Prepare Routing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_urgent }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2a8c1742-f25e-4456-907d-5a83155abf5e",
+      "name": "Is Urgent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "support-escalations",
+          "mode": "name"
+        },
+        "message": "=Urgent ticket {{ $json.ticket_ref }} needs approval before assigning to {{ $json.agent_name }}.\\nCategory: {{ $json.category }}\\nPlease approve or reassign.",
+        "approvalOptions": {
+          "values": {}
+        },
+        "options": {}
+      },
+      "id": "953236d5-eafd-4c57-aaf9-6b56e44fe7f6",
+      "name": "Request Senior Approval",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "3d4ea01d-405c-44c0-8755-abe0d36caae0",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tickets\nSET assigned_agent_id = {{ $json.agent_id }},\n    status = 'ASSIGNED',\n    updated_at = NOW()\nWHERE ticket_id = {{ $json.ticket_id }}\nRETURNING ticket_id, ticket_ref, assigned_agent_id;",
+        "options": {}
+      },
+      "id": "450383f1-aa72-463e-8ad0-765b9e331769",
+      "name": "Update Ticket - Assign Agent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agents SET active_ticket_count = active_ticket_count + 1\nWHERE agent_id = {{ $json.assigned_agent_id }};",
+        "options": {}
+      },
+      "id": "216eb14f-8763-41f9-8c4b-ab706be9899c",
+      "name": "Increment Agent Load",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        480,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $('Update Ticket - Assign Agent').item.json.ticket_id }},\n  'ASSIGNED',\n  'WF3_Agent_Assignment',\n  '{{ JSON.stringify({ agent_id: $('Update Ticket - Assign Agent').item.json.assigned_agent_id }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "b50482ed-4314-4dc6-9915-a01a5a90c3e6",
+      "name": "Log Event - Assigned",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        720,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GvoWSRmha0ePN1ZV",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GvoWSRmha0ePN1ZV",
+          "cachedResultName": "WF4 - Customer Communication & Resolution Tracking"
+        },
+        "workflowInputs": {
+          "value": {
+            "ticket_id": "={{ $('Update Ticket - Assign Agent').item.json.ticket_id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "7b101a2e-7e22-4e59-bb8e-fd0913cc5ec4",
+      "name": "Trigger WF4 - Customer Communication",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        960,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "2967121f-c10d-452d-9939-bf92624d9464",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1456,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ticket_id, ticket_ref, priority, assigned_agent_id, sla_due_at\nFROM v_sla_breaches;",
+        "options": {}
+      },
+      "id": "fbc07492-c244-4e06-8fb3-c2d526ee4f0d",
+      "name": "Check SLA Breaches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1216,
+        544
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "d606beb9-66d5-4887-a937-7b3adf22db04",
+      "name": "Loop Over Breached Tickets",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -976,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tickets\nSET escalated = true,\n    escalated_at = NOW(),\n    priority = 'urgent',\n    updated_at = NOW()\nWHERE ticket_id = {{ $json.ticket_id }}\nRETURNING ticket_id, ticket_ref;",
+        "options": {}
+      },
+      "id": "5b3a145d-d0ed-468f-bc30-41ed4ab5f877",
+      "name": "Escalate Ticket",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -720,
+        464
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "support-escalations",
+          "mode": "name"
+        },
+        "text": "=SLA breached for ticket {{ $json.ticket_ref }}. Auto-escalated to urgent, needs immediate attention.",
+        "otherOptions": {}
+      },
+      "id": "f25064f8-f16a-43a0-b0f8-ed02ccf352e1",
+      "name": "Send Escalation Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        -480,
+        464
+      ],
+      "webhookId": "479b89f8-8f4c-4a61-b5ab-49b63c9e3b03",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $json.ticket_id }},\n  'ESCALATED',\n  'WF3_Agent_Assignment',\n  '{{ JSON.stringify({ reason: \"SLA breach\" }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "cd1947aa-b19a-4438-9400-dec9b1ca6223",
+      "name": "Log Event - Escalated",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -240,
+        464
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "ticket_id": 1
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ticket for Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ticket for Assignment": {
+      "main": [
+        [
+          {
+            "node": "Find Matching Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Matching Agent": {
+      "main": [
+        [
+          {
+            "node": "Agent Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent Found?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Routing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find Fallback Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Fallback Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Routing": {
+      "main": [
+        [
+          {
+            "node": "Is Urgent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Urgent?": {
+      "main": [
+        [
+          {
+            "node": "Request Senior Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Ticket - Assign Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Senior Approval": {
+      "main": [
+        [
+          {
+            "node": "Update Ticket - Assign Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Ticket - Assign Agent": {
+      "main": [
+        [
+          {
+            "node": "Increment Agent Load",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Agent Load": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Assigned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event - Assigned": {
+      "main": [
+        [
+          {
+            "node": "Trigger WF4 - Customer Communication",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check SLA Breaches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check SLA Breaches": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Breached Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Breached Tickets": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Escalate Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalate Ticket": {
+      "main": [
+        [
+          {
+            "node": "Send Escalation Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Escalation Alert": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event - Escalated": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Breached Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "6f988118-8b0c-45a0-917c-25e4fe7e1b7b",
+  "meta": {
+    "instanceId": "df77906c375c302bb650e5e958dcfa6af8fe6f2a90d08461b68f895f570674ea"
+  },
+  "nodeGroups": [],
+  "id": "k8CPXdsuQiMiFLej",
+  "tags": []
+}

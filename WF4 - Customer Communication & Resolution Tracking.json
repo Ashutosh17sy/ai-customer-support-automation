@@ -1,0 +1,635 @@
+{
+  "name": "WF4 - Customer Communication & Resolution Tracking",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "ticket_id"
+            }
+          ]
+        }
+      },
+      "id": "618ad831-83f7-48d4-8e28-a7adefb661ae",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.ticket_id, t.ticket_ref, t.subject, t.ai_draft_reply, t.status,\n       c.name AS customer_name, c.email AS customer_email,\n       a.name AS agent_name\nFROM tickets t\nJOIN customers c ON c.customer_id = t.customer_id\nLEFT JOIN agents a ON a.agent_id = t.assigned_agent_id\nWHERE t.ticket_id = {{ $json.ticket_id }};",
+        "options": {}
+      },
+      "id": "00e711db-018e-4cda-8091-bede865e790b",
+      "name": "Fetch Ticket + Customer + Agent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.customer_email }}",
+        "subject": "=We're on it — Ticket {{ $json.ticket_ref }}",
+        "message": "=Hi {{ $json.customer_name }},<br><br>Your ticket <b>{{ $json.ticket_ref }}</b> (\"{{ $json.subject }}\") has been assigned to {{ $json.agent_name }}.<br><br>{{ $json.ai_draft_reply }}<br><br>We'll keep you posted on progress.<br><br>— Support Team",
+        "options": {}
+      },
+      "id": "3fda00f9-463b-4920-823f-1cafaa115265",
+      "name": "Email - Ticket Assigned",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "webhookId": "096e0fab-d2f7-4e58-b621-8f54d6ee6896",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "LNLYuDRzk9O9ZEk4",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $('Fetch Ticket + Customer + Agent').item.json.ticket_id }},\n  'CUSTOMER_NOTIFIED',\n  'WF4_Customer_Communication',\n  '{{ JSON.stringify({ stage: \"assigned\" }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "31b02795-4312-40f1-9ba1-4736ca8c4067",
+      "name": "Log Event - Customer Notified",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        720,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ticket-status-update",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "495042bb-4250-45a8-b35e-1fc9aea1dd74",
+      "name": "Webhook - Ticket Status Update",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "ticket-status-update"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.ticket_id, t.ticket_ref, t.subject,\n       c.name AS customer_name, c.email AS customer_email\nFROM tickets t\nJOIN customers c ON c.customer_id = t.customer_id\nWHERE t.ticket_id = {{ $json.body.ticket_id }};",
+        "options": {}
+      },
+      "id": "ad4b30a6-1425-4c4f-8c89-c92de5229d19",
+      "name": "Fetch Ticket for Update",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Carry the webhook body forward alongside the fetched ticket data\nconst webhookBody = $('Webhook - Ticket Status Update').item.json.body;\nconst ticket = $input.item.json;\n\nreturn {\n  json: {\n    ...ticket,\n    new_status: webhookBody.new_status,\n    resolution_notes: webhookBody.resolution_notes || ''\n  }\n};"
+      },
+      "id": "547ebebb-3f01-42ce-a854-f017c79e926c",
+      "name": "Prepare Update Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.new_status }}",
+                    "rightValue": "IN_PROGRESS",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "96f78dfc-da3e-469d-9712-010771f29d4d"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.new_status }}",
+                    "rightValue": "RESOLVED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "cbdc67a7-d860-407e-a5c8-1576f7f84bbf"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "da37ee42-e4fe-4e90-90ee-25054ad36df9",
+      "name": "Route by Status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        720,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tickets SET status = 'IN_PROGRESS', updated_at = NOW()\nWHERE ticket_id = {{ $json.ticket_id }}\nRETURNING ticket_id, ticket_ref;",
+        "options": {}
+      },
+      "id": "5c4ee8b8-e063-4a2e-97ea-122d46173303",
+      "name": "Update Status - In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        992,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Prepare Update Data').item.json.customer_email }}",
+        "subject": "=Update on your ticket {{ $('Prepare Update Data').item.json.ticket_ref }}",
+        "message": "=Hi {{ $('Prepare Update Data').item.json.customer_name }},<br><br>Just a quick update — our team is actively working on your ticket <b>{{ $('Prepare Update Data').item.json.ticket_ref }}</b>.<br><br>— Support Team",
+        "options": {}
+      },
+      "id": "4b816697-9765-40b6-ae58-614a829369ec",
+      "name": "Email - In Progress",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1232,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "webhookId": "83045642-a181-4a76-a924-6ca078471b82",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "LNLYuDRzk9O9ZEk4",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $('Update Status - In Progress').item.json.ticket_id }},\n  'STATUS_CHANGED',\n  'WF4_Customer_Communication',\n  '{{ JSON.stringify({ new_status: \"IN_PROGRESS\" }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "30d3cd80-75e4-41ff-bc1c-467908c54278",
+      "name": "Log Event - Status Changed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1472,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tickets SET status = 'RESOLVED', resolved_at = NOW(), updated_at = NOW()\nWHERE ticket_id = {{ $json.ticket_id }}\nRETURNING ticket_id, ticket_ref;",
+        "options": {}
+      },
+      "id": "099dfc25-3cb9-4461-9cc0-27ed2f409d86",
+      "name": "Update Status - Resolved",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        992,
+        544
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Prepare Update Data').item.json.customer_email }}",
+        "subject": "=Resolved: Ticket {{ $('Prepare Update Data').item.json.ticket_ref }}",
+        "message": "=Hi {{ $('Prepare Update Data').item.json.customer_name }},<br><br>Good news — your ticket <b>{{ $('Prepare Update Data').item.json.ticket_ref }}</b> has been resolved.<br><br>{{ $('Prepare Update Data').item.json.resolution_notes }}<br><br>We'd love your feedback — a short survey will follow shortly.<br><br>— Support Team",
+        "options": {}
+      },
+      "id": "40e7799f-7dbb-437a-84f9-1dd0238b8dbe",
+      "name": "Email - Resolved",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1232,
+        544
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "webhookId": "d747ff9b-9060-4ab3-8c65-35c123588da8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "LNLYuDRzk9O9ZEk4",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $('Update Status - Resolved').item.json.ticket_id }},\n  'STATUS_CHANGED',\n  'WF4_Customer_Communication',\n  '{{ JSON.stringify({ new_status: \"RESOLVED\" }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "3f255d9d-9fd4-4ecf-98d4-9bce8ede4e31",
+      "name": "Log Event - Resolved",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1472,
+        544
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "mEJ4EKpZTZQGBHay",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/mEJ4EKpZTZQGBHay",
+          "cachedResultName": "WF5 - Feedback Collection & Support Analytics"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ticket_id": "={{ $('Update Status - Resolved').item.json.ticket_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ticket_id",
+              "displayName": "ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": true,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "68cd7edd-006d-46e7-97a7-0431ef623544",
+      "name": "Trigger WF5 - Feedback Collection",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1712,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"ok\" } }}",
+        "options": {}
+      },
+      "id": "087aec93-a4f9-4aea-8735-29f79ab6d694",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1952,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_events (ticket_id, event_type, workflow_name, details)\nVALUES (\n  {{ $json.ticket_id }},\n  'ERROR',\n  'WF4_Customer_Communication',\n  '{{ JSON.stringify({ error: \"unhandled status value\" }) }}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "bcb40ba4-4c87-4f59-96a9-c70da7c2fd28",
+      "name": "Log Unknown Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        992,
+        704
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "efp7kT3TFDhQ8FM8",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "ticket_id": 1
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ticket + Customer + Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ticket + Customer + Agent": {
+      "main": [
+        [
+          {
+            "node": "Email - Ticket Assigned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - Ticket Assigned": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Customer Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Ticket Status Update": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ticket for Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ticket for Update": {
+      "main": [
+        [
+          {
+            "node": "Prepare Update Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Update Data": {
+      "main": [
+        [
+          {
+            "node": "Route by Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Status": {
+      "main": [
+        [
+          {
+            "node": "Update Status - In Progress",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Status - Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Unknown Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status - In Progress": {
+      "main": [
+        [
+          {
+            "node": "Email - In Progress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - In Progress": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Status Changed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event - Status Changed": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status - Resolved": {
+      "main": [
+        [
+          {
+            "node": "Email - Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - Resolved": {
+      "main": [
+        [
+          {
+            "node": "Log Event - Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event - Resolved": {
+      "main": [
+        [
+          {
+            "node": "Trigger WF5 - Feedback Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger WF5 - Feedback Collection": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Unknown Status": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "81631adf-4740-49fd-ac29-6625b2ad161c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "df77906c375c302bb650e5e958dcfa6af8fe6f2a90d08461b68f895f570674ea"
+  },
+  "nodeGroups": [],
+  "id": "GvoWSRmha0ePN1ZV",
+  "tags": []
+}
