@@ -1,6 +1,6 @@
 # AI Customer Support Automation Platform
 
-**n8n Capstone Project — I3C Summer School 2026 | Assignment 5 (Customer Service domain)**
+**n8n Capstone Project **
 
 An end-to-end, AI-powered customer support automation platform built on self-hosted n8n. The platform ingests support tickets from multiple channels, classifies and prioritizes them with AI, assigns them to agents, manages the full communication lifecycle, and closes the loop with feedback collection and analytics — with zero manual ticket routing.
 
